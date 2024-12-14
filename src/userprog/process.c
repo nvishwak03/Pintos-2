@@ -29,6 +29,7 @@ tid_t
 process_execute (const char *file_name) 
 {
   char *fn_copy;
+  char *ptr;
   tid_t tid;
 
   /* Make a copy of FILE_NAME.
@@ -39,6 +40,7 @@ process_execute (const char *file_name)
   strlcpy (fn_copy, file_name, PGSIZE);
 
   /* Create a new thread to execute FILE_NAME. */
+  file_name = strtok_r(file_name, " ", &ptr);
   tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
@@ -50,20 +52,56 @@ process_execute (const char *file_name)
 static void
 start_process (void *file_name_)
 {
+  char *parsed[100];
+  char *token;
   char *file_name = file_name_;
   struct intr_frame if_;
   bool success;
+
+  char *rest_args;
+  int cnt = 0;
+  token = strtok_r(file_name, " ", &rest_args);
+  while (token != NULL) {
+    parsed[cnt++] = token;
+    token = strtok_r(NULL, " ", &rest_args);
+  }
+  parsed[cnt] = NULL;
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
-  success = load (file_name, &if_.eip, &if_.esp);
+  success = load(parsed[0], &if_.eip, &if_.esp);
+  if (success) {
+    int argv[cnt];
 
+    for (int i = cnt - 1; i >= 0; i--) {
+      int len = strlen(parsed[i]) + 1;
+      if_.esp -= len;
+      memcpy(if_.esp, parsed[i], len);
+      argv[i] = (int)if_.esp;
+    }
+
+    if_.esp = (void *)((unsigned int)if_.esp & 0xfffffffc);
+
+    if_.esp -= 4;
+    *(int *)if_.esp = 0;
+
+    for (int i = cnt - 1; i >= 0; i--) {
+      if_.esp -= 4;
+      *(int *)if_.esp = argv[i];
+    }
+    if_.esp -= 4;
+    *(int *)if_.esp = (int)if_.esp + 4;
+    if_.esp -= 4;
+    *(int *)if_.esp = cnt;
+    if_.esp -= 4;
+    *(int *)if_.esp = 0;
+  }
   /* If load failed, quit. */
   palloc_free_page (file_name);
-  if (!success) 
+  if (!success)
     thread_exit ();
 
   /* Start the user process by simulating a return from an
@@ -86,8 +124,16 @@ start_process (void *file_name_)
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) 
+process_wait (tid_t child_tid UNUSED)
 {
+  //Temporary had to change TODO
+  int temp = 1;
+  while(true)
+  {
+    temp++;
+    if(temp > 100000 * 100000)
+    break;
+  }
   return -1;
 }
 
@@ -130,8 +176,8 @@ process_activate (void)
   /* Set thread's kernel stack for use in processing
      interrupts. */
   tss_update ();
-}
-
+}
+
 /* We load ELF binaries.  The following definitions are taken
    from the ELF specification, [ELF1], more-or-less verbatim.  */
 
@@ -244,7 +290,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
   /* Read program headers. */
   file_ofs = ehdr.e_phoff;
-  for (i = 0; i < ehdr.e_phnum; i++) 
+  for (i = 0; i < ehdr.e_phnum; i++)
     {
       struct Elf32_Phdr phdr;
 
@@ -314,8 +360,8 @@ load (const char *file_name, void (**eip) (void), void **esp)
   /* We arrive here whether the load is successful or not. */
   file_close (file);
   return success;
-}
-
+}
+
 /* load() helpers. */
 
 static bool install_page (void *upage, void *kpage, bool writable);
@@ -437,7 +483,7 @@ setup_stack (void **esp)
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
       if (success)
-        *esp = PHYS_BASE;
+        *esp = PHYS_BASE-12;   // given in the pintos manual for temporary adjustment
       else
         palloc_free_page (kpage);
     }
