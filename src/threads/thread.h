@@ -93,8 +93,12 @@ struct thread
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
 
+
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
+    struct process *p;
+    struct list active_child_processes;
+    struct list file_descriptors;
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
