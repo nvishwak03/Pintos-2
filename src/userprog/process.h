@@ -12,23 +12,15 @@ struct arg
 
 struct process
 {
-    // Used to prevent writing to executable
     struct file *f;
-
-    // Argument passing
     char *name;
     struct list args;
-
-    // Parent-child synchronization
     tid_t tid;
     bool parent_alive;
-
     struct semaphore on_load;
     int load_success;
-
     struct semaphore on_exit;
     int exit_status;
-
     struct list_elem elem;
 };
 

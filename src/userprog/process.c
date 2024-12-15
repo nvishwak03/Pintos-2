@@ -17,23 +17,20 @@
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
-#include "threads/malloc.h"
-#include "threads/synch.h"
 
 static thread_func start_process NO_RETURN;
-static bool load (struct process *p, void (**eip) (void), void **esp);
+static bool load (const char *cmdline, void (**eip) (void), void **esp, struct process *p);
 
 /* Starts a new thread running a user program loaded from
    ARGS.  The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
    thread id, or TID_ERROR if the thread cannot be created. */
 tid_t
-process_execute (const char *args) 
+process_execute (const char *file_name) 
 {
-  char *args_copy;
+  char *fn_copy;
   tid_t tid;
 
-  // Allocate and initialize data to pass to child process
   struct process *p = malloc(sizeof(struct process));
   list_init(&p->args);
   sema_init(&p->on_load, 0);
@@ -42,14 +39,14 @@ process_execute (const char *args)
 
   /* Make a copy of ARGS.
      Otherwise there's a race between the caller and load(). */
-  args_copy = palloc_get_page (0);
-  if (args_copy == NULL)
+  fn_copy = palloc_get_page (0);
+  if (fn_copy == NULL)
     return TID_ERROR;
-  strlcpy (args_copy, args, PGSIZE);
+  strlcpy (fn_copy, file_name, PGSIZE);
 
   // Tokenize args to get filename and arguments
   char *token, *save_ptr;
-  for (token = strtok_r (args_copy, " ", &save_ptr); token != NULL;
+  for (token = strtok_r (fn_copy, " ", &save_ptr); token != NULL;
        token = strtok_r (NULL, " ", &save_ptr))
   {
     struct arg *a = malloc(sizeof(struct arg));
@@ -68,15 +65,11 @@ process_execute (const char *args)
     else
     {
       p->tid = tid;
-      list_push_front
-        (&(thread_current()->active_child_processes),
-         &p->elem);
+      list_push_front(&(thread_current()->active_child_processes),&p->elem);
     }
   }
 
-  palloc_free_page(p->name);
-  if (tid == TID_ERROR)
-    free(p);
+  palloc_free_page(fn_copy);
   
   return tid;
 }
@@ -84,9 +77,9 @@ process_execute (const char *args)
 /* A thread function that loads a user process and starts it
    running. */
 static void
-start_process (void *aux)
+start_process (void *file_name)
 {
-  struct process *p = (struct process*)aux;
+  struct process *p = (struct process*)file_name;
   struct intr_frame if_;
   bool success;
 
@@ -95,7 +88,7 @@ start_process (void *aux)
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
-  success = load (p, &if_.eip, &if_.esp);
+  success = load (p, &if_.eip, &if_.esp, p);
 
   /* If load failed, quit. */
   if (!success) 
@@ -104,7 +97,42 @@ start_process (void *aux)
     sema_up(&p->on_load);
     thread_exit ();
   }
+  else{
+    if_.esp = PHYS_BASE;
+    char **ptr_arg = malloc(list_size(&p->args) * sizeof(char*));
+    if (ptr_arg == NULL) {
+        return false;
+    }
+    int argc = 0;
+    struct list_elem *e = list_rbegin(&p->args);
+    while (e != list_rend(&p->args)) {
+        struct arg *a = list_entry(e, struct arg, elem);
+        e = list_prev(e);
+        size_t arg_len = strlen(a->value) + 1;
+        if_.esp -= arg_len;
+        memcpy(if_.esp, a->value, arg_len);
+        ptr_arg[argc++] = if_.esp;
+    }
+    
+    if_.esp -= (uintptr_t)if_.esp % 4;
 
+    if_.esp -= sizeof(char*);
+    *((void**)if_.esp) = NULL;
+
+    for (int i = argc - 1; i>=0; i--) {
+        if_.esp -= sizeof(char*);
+        *((char**)if_.esp) = ptr_arg[i];
+    }
+
+    char **argv_start = (char**)if_.esp;
+    if_.esp -= sizeof(char**);
+    *((char***)(if_.esp)) = argv_start;
+    if_.esp -= sizeof(int);
+    *((int*)(if_.esp)) = argc;
+
+    if_.esp -= sizeof(void*);
+    *((void**)if_.esp) = NULL;
+  }
   p->load_success = true;
   sema_up(&p->on_load);
 
@@ -124,27 +152,23 @@ start_process (void *aux)
    child of the calling process, or if process_wait() has already
    been successfully called for the given TID, returns -1
    immediately, without waiting. */
-int
+int 
 process_wait (tid_t child_tid) 
 {
-  struct list_elem *e;
-  struct list *active_child_processes = &thread_current()->active_child_processes;
-
-  for (e = list_begin (active_child_processes); e != list_end (active_child_processes);
-        e = list_next (e))
-    {
-      struct process *p = list_entry (e, struct process, elem);
-      if(p->tid == child_tid)
-      {
-        sema_down(&p->on_exit);
-        list_remove(&p->elem);
-        int exit_status = p->exit_status;
-        free(p);
-        return exit_status;
-      }
+    struct list_elem *e= list_begin(&thread_current()->active_child_processes);
+    while (e != list_end(&thread_current()->active_child_processes)){
+        struct process *p = list_entry(e, struct process, elem);
+        e = list_next(e);
+        if(p->tid == child_tid) 
+        {
+            sema_down(&p->on_exit);
+            int exit_status = p->exit_status;
+            list_remove(&p->elem);
+            return exit_status;
+        }
     }
 
-  return -1;
+    return -1;
 }
 
 /* Free the current process's resources. */
@@ -186,8 +210,8 @@ process_activate (void)
   /* Set thread's kernel stack for use in processing
      interrupts. */
   tss_update ();
-}
-
+}
+
 /* We load ELF binaries.  The following definitions are taken
    from the ELF specification, [ELF1], more-or-less verbatim.  */
 
@@ -262,7 +286,7 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
    and its initial stack pointer into *ESP.
    Returns true if successful, false otherwise. */
 bool
-load (struct process *p, void (**eip) (void), void **esp) 
+load (const char *cmdline, void (**eip) (void), void **esp, struct process *p) 
 {
   struct thread *t = thread_current ();
   struct Elf32_Ehdr ehdr;
@@ -371,8 +395,8 @@ load (struct process *p, void (**eip) (void), void **esp)
  done:
   /* We arrive here whether the load is successful or not. */
   return success;
-}
-
+}
+
 /* load() helpers. */
 
 static bool install_page (void *upage, void *kpage, bool writable);
@@ -483,82 +507,18 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 
 /* Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */
-static bool
+static bool 
 setup_stack (void **esp, struct process *p) 
 {
-  uint8_t *kpage;
-  bool success = false;
+    uint8_t *kpage = palloc_get_page (PAL_USER | PAL_ZERO);
+    if (kpage == NULL) 
+        return false;
 
-  kpage = palloc_get_page (PAL_USER | PAL_ZERO);
-  if (kpage != NULL) 
-    {
-      // kpage/upage point to the bottom (address-wise) of the page
-      success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
-      if (success)
-      {
-        // Get address of bottom of page, then word align it
-        char *stack = (char*)ROUND_DOWN((int)kpage + PGSIZE, sizeof(char*));
-        char *stack_bottom = (char*)(kpage + PGSIZE);
-        int argc = list_size(&p->args);
-        int i = 0;
-        void **arg_pointers = malloc(sizeof(void*) * argc);
-        
-        // Push arguments
-        struct list_elem *e;
-        for (e = list_begin (&p->args); e != list_end (&p->args);
-             e = list_next (e))
-        {
-          struct arg *a = list_entry (e, struct arg, elem);
-
-          /* 128 byte limitation is based on manual p. 29.
-             one byte added to include null terminator */
-          size_t arg_size = strlen(a->value) + 1;
-          stack -= arg_size;
-          strlcpy(stack, a->value, arg_size);
-
-          // Preserve addresses, converted to user space,
-          // of args on the stack
-          arg_pointers[i] = PHYS_BASE - (stack_bottom - stack);
-          i++;
-        }
-        
-        // Re-align stack pointer
-        stack = (char*)ROUND_DOWN((int)stack, sizeof(char*));
-
-        // Push null pointer sentinel (though this should already
-        // be zeroed anyway)
-        stack -= sizeof(void*);
-        memset(stack, 0, sizeof(void*));
-
-        // Push arg pointers
-        for(int i = 0; i < argc; i++)
-        {
-          stack -= sizeof(char*);
-          memcpy(stack, &arg_pointers[i], sizeof(char*));
-        }
-
-        // Push argv address, converted to user space
-        char **argv_start = PHYS_BASE - (stack_bottom - stack);
-        stack -= sizeof(char**);
-        memcpy(stack, &argv_start, sizeof(char**));
-
-        // Push argc value
-        stack -= sizeof(int);
-        memcpy(stack, &argc, sizeof(int));
-        
-        // Push fake return address
-        stack -= sizeof(void*);
-        memset(stack, 0, sizeof(void*));
-
-        // Set user-space stack pointer based on
-        // number of bytes pushed to stack
-        *esp = PHYS_BASE - (stack_bottom - stack);
-      }
-      else
-        palloc_free_page (kpage);
+    if (!install_page (((uint8_t *)PHYS_BASE) - PGSIZE, kpage, true)) {
+        return false;
     }
 
-  return success;
+    return true;
 }
 
 /* Adds a mapping from user virtual address UPAGE to kernel
