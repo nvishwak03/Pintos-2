@@ -108,7 +108,7 @@ static bool verify_string(const char* s)
 
 static struct open_file* get_open_file (int target_fd)
 {
-  struct list *fd_list = &thread_current()->file_descriptors;
+  struct list *fd_list = &thread_current()->files;
   struct list_elem *current_elem = list_begin(fd_list);
 
   while (current_elem != list_end(fd_list))
@@ -121,7 +121,7 @@ static struct open_file* get_open_file (int target_fd)
 }
 
 void close_files(void) {
-    struct list *fd_list = &thread_current()->file_descriptors;
+    struct list *fd_list = &thread_current()->files;
     while (!list_empty(fd_list)) {
         struct list_elem *elem = list_pop_front(fd_list);
         struct open_file *opfile_entry = list_entry(elem, struct open_file, elem);
@@ -135,25 +135,25 @@ void close_files(void) {
 }
 
 void notify_exit(void) {
-    struct list *ch_list = &thread_current()->active_child_processes;
+    struct list *ch_list = &thread_current()->child;
     while (!list_empty(ch_list)) {
         struct list_elem *elem = list_pop_front(ch_list);
         struct process *ch_process = list_entry(elem, struct process, elem);
-        ch_process->parent_alive = false;
+        ch_process->par_status = false;
     }
 }
 
 void handle_parent(void) {
     struct process *c_process = thread_current()->p;
-    if (c_process->parent_alive) {
-        sema_up(&c_process->on_exit);
+    if (c_process->par_status) {
+        sema_up(&c_process->semaExit);
     } 
 }
 
 int sys_exit(int exit_code, int arg1 UNUSED, int arg2 UNUSED) {
     struct thread *c_thread = thread_current();
     struct process *c_process = c_thread->p;
-    c_process->exit_status = exit_code;
+    c_process->status_exit = exit_code;
     printf("%s: exit(%d)\n", c_thread->name, exit_code);
     close_files();
     notify_exit();
@@ -264,7 +264,7 @@ static int sys_open(int filename_ptr, int unused1 UNUSED, int unused2 UNUSED)
     struct open_file *opfile_entry = malloc(sizeof(struct open_file));
     opfile_entry->f = f_open;
     opfile_entry->fd = fd++;
-    list_push_back(&thread_current()->file_descriptors, &opfile_entry->elem);
+    list_push_back(&thread_current()->files, &opfile_entry->elem);
 
     return opfile_entry->fd;
 }

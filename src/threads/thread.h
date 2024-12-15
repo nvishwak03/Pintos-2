@@ -97,8 +97,8 @@ struct thread
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
     struct process *p;
-    struct list active_child_processes;
-    struct list file_descriptors;
+    struct list child;
+    struct list files;
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */

@@ -12,16 +12,16 @@ struct arg
 
 struct process
 {
+    struct list args;
     struct file *f;
     char *name;
-    struct list args;
     tid_t tid;
-    bool parent_alive;
-    struct semaphore on_load;
-    int load_success;
-    struct semaphore on_exit;
-    int exit_status;
+    struct semaphore semaLoad;
+    struct semaphore semaExit;
     struct list_elem elem;
+    bool par_status;
+    int status_load;
+    int status_exit;
 };
 
 tid_t process_execute (const char *file_name);

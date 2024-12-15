@@ -33,9 +33,9 @@ process_execute (const char *file_name)
 
   struct process *p = malloc(sizeof(struct process));
   list_init(&p->args);
-  sema_init(&p->on_load, 0);
-  sema_init(&p->on_exit, 0);
-  p->parent_alive = true;
+  sema_init(&p->semaLoad, 0);
+  sema_init(&p->semaExit, 0);
+  p->par_status = true;
 
   /* Make a copy of ARGS.
      Otherwise there's a race between the caller and load(). */
@@ -59,13 +59,13 @@ process_execute (const char *file_name)
   tid = thread_create (p->name, PRI_DEFAULT, start_process, p);
   if (tid != TID_ERROR)
   {
-    sema_down(&p->on_load);
-    if(!p->load_success)
+    sema_down(&p->semaLoad);
+    if(!p->status_load)
       tid = TID_ERROR;
     else
     {
       p->tid = tid;
-      list_push_front(&(thread_current()->active_child_processes),&p->elem);
+      list_push_front(&(thread_current()->child),&p->elem);
     }
   }
 
@@ -93,8 +93,8 @@ start_process (void *file_name)
   /* If load failed, quit. */
   if (!success) 
   {
-    p->load_success = false;
-    sema_up(&p->on_load);
+    p->status_load = false;
+    sema_up(&p->semaLoad);
     thread_exit ();
   }
   else{
@@ -133,8 +133,8 @@ start_process (void *file_name)
     if_.esp -= sizeof(void*);
     *((void**)if_.esp) = NULL;
   }
-  p->load_success = true;
-  sema_up(&p->on_load);
+  p->status_load = true;
+  sema_up(&p->semaLoad);
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -155,16 +155,16 @@ start_process (void *file_name)
 int 
 process_wait (tid_t child_tid) 
 {
-    struct list_elem *e= list_begin(&thread_current()->active_child_processes);
-    while (e != list_end(&thread_current()->active_child_processes)){
+    struct list_elem *e= list_begin(&thread_current()->child);
+    while (e != list_end(&thread_current()->child)){
         struct process *p = list_entry(e, struct process, elem);
         e = list_next(e);
         if(p->tid == child_tid) 
         {
-            sema_down(&p->on_exit);
-            int exit_status = p->exit_status;
+            sema_down(&p->semaExit);
+            int status_exit = p->status_exit;
             list_remove(&p->elem);
-            return exit_status;
+            return status_exit;
         }
     }
 
